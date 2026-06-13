@@ -95,6 +95,11 @@ class Settings:
     # by the same TCC grant on macOS.
     hangup_spool_path: str = "~/Library/Application Support/felicetti-voice/hangups.jsonl"
 
+    # After-hours intake records (one JSON line per inbound call: language,
+    # transcript, English summary). Lives next to the hangup spool so it's
+    # covered by the same macOS TCC grant.
+    intake_spool_path: str = "~/Library/Application Support/felicetti-voice/intakes.jsonl"
+
     # --- Derived ---
     # Filled in by __post_init__ via object.__setattr__ since the dataclass is frozen.
     media_ws_url: str | None = field(default=None, init=False)
@@ -138,6 +143,8 @@ class Settings:
             or "sqlite+aiosqlite:///./feli_voice_agent.db",
             hangup_spool_path=_env("HANGUP_SPOOL_PATH")
             or "~/Library/Application Support/felicetti-voice/hangups.jsonl",
+            intake_spool_path=_env("INTAKE_SPOOL_PATH")
+            or "~/Library/Application Support/felicetti-voice/intakes.jsonl",
         )
 
 

@@ -37,13 +37,8 @@ UtteranceEndCallback = Callable[[], Awaitable[None]]
 # Fired when Deepgram emits an UtteranceEnd event (true turn boundary).
 
 
-def _default_keyterms() -> list[str]:
-    """Harvest domain vocabulary from the persona prompt + Spanish variants.
-
-    Phone audio + multilingual mode mis-hears the firm name, attorney/legal
-    terms, and practice areas most often. Sourcing the English terms from
-    persona keeps this list in sync if the firm details change.
-    """
+def _en_keyterms() -> list[str]:
+    """English domain vocabulary, sourced from persona so it stays in sync."""
     practice_areas = [
         t.strip() for t in re.split(r",|\band\b", PRACTICE_AREAS) if t.strip()
     ]
@@ -55,7 +50,13 @@ def _default_keyterms() -> list[str]:
         "appointment",
         "intake",
         *practice_areas,
-        # Spanish equivalents for the formal "usted" law-firm register.
+    ]
+
+
+def _es_keyterms() -> list[str]:
+    """Spanish equivalents for the formal "usted" law-firm register."""
+    return [
+        "Felicetti",
         "consulta",
         "abogado",
         "cita",
@@ -64,6 +65,28 @@ def _default_keyterms() -> list[str]:
         "derecho de familia",
         "planificación patrimonial",
     ]
+
+
+def keyterms_for_language(language: str | None) -> list[str]:
+    """Keyterm boost list for a locked-language stream.
+
+    `"en"`/`"es"` get their monolingual lists; anything else (e.g. `"multi"`)
+    gets the combined list used during the bilingual language gate.
+    """
+    if language == "en":
+        return _en_keyterms()
+    if language == "es":
+        return _es_keyterms()
+    return _default_keyterms()
+
+
+def _default_keyterms() -> list[str]:
+    """Combined EN+ES vocabulary for the multilingual stream.
+
+    Phone audio + multilingual mode mis-hears the firm name, attorney/legal
+    terms, and practice areas most often.
+    """
+    return [*_en_keyterms(), *_es_keyterms()]
 
 
 class DeepgramStream:
@@ -80,7 +103,7 @@ class DeepgramStream:
         encoding: str = "mulaw",
         sample_rate: int = 8000,
         channels: int = 1,
-        endpointing_ms: int = 300,
+        endpointing_ms: int | None = None,
         utterance_end_ms: int = 1000,
         keyterms: list[str] | None = None,
     ) -> None:
@@ -89,15 +112,22 @@ class DeepgramStream:
         self._on_utterance_end = on_utterance_end
 
         model_name = model or settings.deepgram_model
+        lang = language or settings.deepgram_language
         # nova-3 uses `keyterm` (plain phrase); nova-2 uses `keywords`
         # (phrase:intensity). Branching on the model keeps a DEEPGRAM_MODEL
         # env override fully reversible without code changes.
         is_nova3 = model_name.startswith("nova-3")
         terms = keyterms if keyterms is not None else _default_keyterms()
 
+        if endpointing_ms is None:
+            # Deepgram's multilingual guidance recommends a short 100ms endpoint
+            # for language=multi (code-switching finalizes faster); monolingual
+            # streams transcribe more accurately with a longer 300ms window.
+            endpointing_ms = 100 if lang == "multi" else 300
+
         params: list[tuple[str, str | int]] = [
             ("model", model_name),
-            ("language", language or settings.deepgram_language),
+            ("language", lang),
             ("encoding", encoding),
             ("sample_rate", sample_rate),
             ("channels", channels),

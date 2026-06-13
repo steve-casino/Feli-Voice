@@ -20,6 +20,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import time
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -28,12 +29,19 @@ from app import state
 from app.config import settings
 from app.models.telnyx import CallSession, TelnyxMediaFrame
 from app.prompts.persona import (
+    INTAKE_SUMMARY_PROMPT,
+    INTAKE_SYSTEM_PROMPT_EN,
+    INTAKE_SYSTEM_PROMPT_ES,
+    LANGUAGE_CONFIRM_EN,
+    LANGUAGE_CONFIRM_ES,
+    LANGUAGE_GATE_GREETING,
+    LANGUAGE_GATE_REPROMPT,
     OUTBOUND_GREETING_TEXT,
     OUTBOUND_SYSTEM_PROMPT,
-    SYSTEM_PROMPT,
 )
+from app.services import intake_spool
 from app.services.anthropic_service import anthropic_service
-from app.services.deepgram_service import DeepgramStream
+from app.services.deepgram_service import DeepgramStream, keyterms_for_language
 from app.services.elevenlabs_service import ElevenLabsStream
 
 logger = logging.getLogger(__name__)
@@ -80,14 +88,52 @@ def _drain_sentences(buffer: str) -> tuple[list[str], str]:
         i += 1
     return sentences, buffer[last:]
 
-# Inbound opening line — must match the persona prompt so Claude has it in
-# context for follow-up turns. Bilingual: English first, then Spanish.
-GREETING_TEXT = (
-    "Thank you for calling Felicetti Law Firm. "
-    "This is the firm's assistant. How can I help you today? "
-    "Gracias por llamar a Felicetti Law Firm. "
-    "Soy el asistente del bufete. ¿En qué puedo ayudarle hoy?"
-)
+# ---------------------------------------------------------------------------
+# Language-gate classification
+# ---------------------------------------------------------------------------
+# The greeting asks the caller to say "English" (asked in English) or
+# "español" (asked in Spanish). Classification is deliberately deterministic —
+# no LLM round-trip for a two-way choice — with loose hint matching as a
+# fallback for callers who answer with a sentence instead of one word.
+
+_ES_CHOICE_WORDS = {"español", "espanol", "spanish", "castellano"}
+_EN_CHOICE_WORDS = {"english", "inglés", "ingles"}
+_ES_HINT_WORDS = {
+    "hola", "buenas", "noches", "sí", "si", "quiero", "necesito", "hablo",
+    "habla", "favor", "ayuda", "llamo", "abogado", "gracias", "bueno",
+}
+_EN_HINT_WORDS = {
+    "hello", "hi", "hey", "yes", "yeah", "please", "help", "need", "calling",
+    "call", "lawyer", "attorney", "speak", "want",
+}
+
+_WORD_RE = re.compile(r"[a-záéíóúüñ]+")
+
+
+def classify_language_choice(text: str) -> str | None:
+    """Map a caller's first utterance to "en"/"es", or None if unclear.
+
+    Explicit choice words win outright; saying "Spanish" in English still
+    means the caller wants Spanish. If both appear (caller echoing the whole
+    prompt), it's ambiguous. Otherwise fall back to counting common-word
+    hints in each language.
+    """
+    tokens = set(_WORD_RE.findall(text.lower()))
+    wants_es = bool(tokens & _ES_CHOICE_WORDS)
+    wants_en = bool(tokens & _EN_CHOICE_WORDS)
+    if wants_es and not wants_en:
+        return "es"
+    if wants_en and not wants_es:
+        return "en"
+    if wants_en and wants_es:
+        return None
+    es_hits = len(tokens & _ES_HINT_WORDS)
+    en_hits = len(tokens & _EN_HINT_WORDS)
+    if es_hits > en_hits:
+        return "es"
+    if en_hits > es_hits:
+        return "en"
+    return None
 
 
 @router.websocket("/media")
@@ -133,6 +179,8 @@ async def telnyx_media(ws: WebSocket) -> None:
                     call_control_id=call_control_id,
                     stream_id=frame.stream_id,
                     direction=direction,
+                    from_number=start.get("from"),
+                    to_number=start.get("to"),
                 )
                 orchestrator = ConversationOrchestrator(
                     ws=ws,
@@ -168,6 +216,9 @@ async def telnyx_media(ws: WebSocket) -> None:
     finally:
         if orchestrator is not None:
             await orchestrator.aclose()
+            # Persist the intake record (inbound calls only) after teardown,
+            # while this per-connection task is still alive.
+            await orchestrator.save_intake_if_needed()
         try:
             await ws.close()
         except Exception:  # noqa: BLE001
@@ -212,6 +263,10 @@ class ConversationOrchestrator:
         # The currently-speaking assistant turn, tracked so a barge-in can
         # cancel it mid-reply. Distinct from the long-lived turn *loop*.
         self._active_turn_task: asyncio.Task | None = None
+        # Background greeting playback (fired in start()). Tracked so the
+        # language-confirm reply or first assistant turn can stop it before
+        # speaking, instead of queuing audio on top of a still-playing greeting.
+        self._greeting_task: asyncio.Task | None = None
         # Set when the caller has produced final transcript text that hasn't
         # been answered yet. Gates the turn so UtteranceEnd/speech_final don't
         # fire empty turns.
@@ -229,13 +284,27 @@ class ConversationOrchestrator:
         # the pacer's 20ms slot would leave a gap of silence — audible chop.
         self._outbound_partial = bytearray()
 
-        # Select greeting and system prompt based on call direction.
+        # Full conversation log for the intake record. Unlike
+        # session.transcript (pruned for token cost, cleared at the language
+        # gate), this keeps every line of the call.
+        self._call_log: list[dict] = []
+        # Caller's locked language ("en"/"es"), set at the language gate.
+        self._language: str | None = None
+        self._lang_gate_attempts = 0
+
+        # Select greeting, system prompt, and flow stage by call direction.
+        # Inbound calls open with a language gate: the caller picks English
+        # or Spanish, then the call proceeds in that language only.
         if session.direction == "outgoing":
             self._greeting = custom_greeting or OUTBOUND_GREETING_TEXT
             self._system_prompt = OUTBOUND_SYSTEM_PROMPT
+            self._stage = "conversation"
         else:
-            self._greeting = GREETING_TEXT
-            self._system_prompt = SYSTEM_PROMPT
+            self._greeting = LANGUAGE_GATE_GREETING
+            # Replaced with the locked-language intake persona at the gate;
+            # EN fallback in case a turn somehow runs before selection.
+            self._system_prompt = INTAKE_SYSTEM_PROMPT_EN
+            self._stage = "language_select"
 
     async def start(self) -> None:
         logger.info("Orchestrator starting; opening Deepgram stream")
@@ -259,8 +328,9 @@ class ConversationOrchestrator:
         self._session.transcript.append(
             {"role": "assistant", "content": self._greeting}
         )
+        self._call_log.append({"role": "assistant", "content": self._greeting})
         self._assistant_turn_task = asyncio.create_task(self._assistant_turn_loop())
-        asyncio.create_task(self._speak(self._greeting))
+        self._greeting_task = asyncio.create_task(self._speak(self._greeting))
 
     async def on_inbound_audio(self, mulaw_bytes: bytes) -> None:
         self._inbound_frames += 1
@@ -289,6 +359,10 @@ class ConversationOrchestrator:
             return
 
         logger.info("Caller (final): %s", text)
+        if self._call_log and self._call_log[-1]["role"] == "user":
+            self._call_log[-1]["content"] += " " + text
+        else:
+            self._call_log.append({"role": "user", "content": text})
         if self._session.transcript and self._session.transcript[-1]["role"] == "user":
             # Concatenate consecutive user finals (Deepgram emits multiple
             # finals per long utterance).
@@ -332,6 +406,28 @@ class ConversationOrchestrator:
             pass
         self._outbound_partial.clear()
 
+    async def _cancel_greeting(self) -> None:
+        """Ensure the opening greeting is finished before any other speech.
+
+        The greeting is fired as a background task in start(); without this a
+        language-confirm line or assistant turn would queue its audio on top of
+        the still-playing greeting and the two would interleave. Cancel the task
+        if it's still running (otherwise just await its completion), then drain
+        any greeting audio still buffered or queued so the next speech is clean.
+        Idempotent: subsequent calls are no-ops.
+        """
+        task = self._greeting_task
+        if task is None:
+            return
+        self._greeting_task = None
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+        self._drain_outbound_queue()
+
     async def _assistant_turn_loop(self) -> None:
         """Serialize assistant turns and keep up with interrupted callers.
 
@@ -347,9 +443,16 @@ class ConversationOrchestrator:
                 if self._closed:
                     return
                 async with self._turn_lock:
+                    self._pending_user_input = False
+                    # Language gate: the first caller utterance(s) pick the
+                    # call language. Handled inline (not as a cancellable
+                    # child task) so a barge-in can't abort the language
+                    # swap halfway through.
+                    if self._stage == "language_select":
+                        await self._handle_language_selection()
+                        continue
                     # Run the turn as a child task so a barge-in can cancel it
                     # mid-reply without tearing down this loop.
-                    self._pending_user_input = False
                     self._active_turn_task = asyncio.create_task(
                         self._run_assistant_turn_once()
                     )
@@ -364,10 +467,148 @@ class ConversationOrchestrator:
         except asyncio.CancelledError:
             return
 
+    async def _handle_language_selection(self) -> None:
+        """Resolve the caller's language choice from their latest utterance.
+
+        Unclear answer → one fixed bilingual reprompt; still unclear → default
+        to English (an English-speaking agent asking for a callback number is
+        recoverable in any case; dead air is not).
+        """
+        # Stop the opening greeting before the reprompt/confirm so fixed-line
+        # speech never overlaps.
+        await self._cancel_greeting()
+        text = ""
+        if self._session.transcript and self._session.transcript[-1]["role"] == "user":
+            text = self._session.transcript[-1]["content"]
+        lang = classify_language_choice(text)
+        logger.info("Language gate: heard %r -> %s", text, lang)
+        if lang is None:
+            self._lang_gate_attempts += 1
+            if self._lang_gate_attempts < 2:
+                self._session.transcript.append(
+                    {"role": "assistant", "content": LANGUAGE_GATE_REPROMPT}
+                )
+                self._call_log.append(
+                    {"role": "assistant", "content": LANGUAGE_GATE_REPROMPT}
+                )
+                await self._speak(LANGUAGE_GATE_REPROMPT)
+                return
+            lang = "en"
+            logger.info("Language gate: still unclear, defaulting to English")
+        await self._lock_language(lang)
+
+    async def _lock_language(self, lang: str) -> None:
+        """Switch the call into single-language mode.
+
+        Swaps in the locked-language intake persona, restarts STT as a
+        monolingual stream (markedly more accurate than multi mode), resets
+        the LLM conversation so the gate exchange doesn't bleed into intake
+        context, and speaks the confirmation + first intake question.
+        """
+        self._stage = "conversation"
+        self._language = lang
+        self._system_prompt = (
+            INTAKE_SYSTEM_PROMPT_ES if lang == "es" else INTAKE_SYSTEM_PROMPT_EN
+        )
+        confirm = LANGUAGE_CONFIRM_ES if lang == "es" else LANGUAGE_CONFIRM_EN
+        # Preserve the caller's last utterance before resetting history — it
+        # often carries the real reason for the call ("necesito un abogado por
+        # un accidente"), not just the language word. Re-append it after the
+        # confirm line so Claude's first real turn has that context.
+        preserved_user: str | None = None
+        for msg in reversed(self._session.transcript):
+            if msg["role"] == "user":
+                preserved_user = msg["content"]
+                break
+        # Fresh LLM history: seed with the confirmation line so Claude knows
+        # it already asked for the caller's name.
+        self._session.transcript.clear()
+        self._session.transcript.append({"role": "assistant", "content": confirm})
+        if preserved_user:
+            self._session.transcript.append(
+                {"role": "user", "content": preserved_user}
+            )
+        self._call_log.append({"role": "assistant", "content": confirm})
+        logger.info("Language locked: %s", lang)
+        await self._swap_deepgram(lang)
+        await self._speak(confirm)
+
+    async def _swap_deepgram(self, lang: str) -> None:
+        """Replace the multilingual STT stream with a monolingual one.
+
+        Opens the new stream before closing the old one so a failure (e.g.
+        unsupported language/model combination) degrades gracefully back to
+        the multilingual stream instead of leaving the call deaf.
+        """
+        try:
+            new_dg = DeepgramStream(
+                on_transcript=self._on_transcript,
+                on_utterance_end=self._on_utterance_end,
+                language=lang,
+                # Monolingual stream: the longer 300ms endpoint is more
+                # accurate than the 100ms used for the multilingual gate.
+                endpointing_ms=300,
+                keyterms=keyterms_for_language(lang),
+            )
+            await new_dg.__aenter__()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Deepgram %s swap failed; keeping multilingual stream", lang
+            )
+            return
+        old_dg, self._dg = self._dg, new_dg
+        if old_dg is not None:
+            try:
+                await old_dg.close()
+            except Exception:  # noqa: BLE001
+                pass
+        logger.info("Deepgram stream swapped to language=%s", lang)
+
+    async def save_intake_if_needed(self) -> None:
+        """Write the intake record for inbound calls. Called at teardown.
+
+        Skips outbound calls (the dialer's hangup spool covers those) and
+        calls where the caller never said anything. Summary generation is
+        best-effort: on failure the raw transcript still gets stored.
+        """
+        if self._session.direction != "incoming":
+            return
+        if not any(m["role"] == "user" for m in self._call_log):
+            logger.info("No caller speech; skipping intake record")
+            return
+        summary: str | None = None
+        try:
+            convo = "\n".join(
+                f"{m['role']}: {m['content']}" for m in self._call_log
+            )
+            parts: list[str] = []
+            async for delta in anthropic_service.stream_reply(
+                system=INTAKE_SUMMARY_PROMPT,
+                messages=[{"role": "user", "content": convo}],
+                max_tokens=300,
+                temperature=0.0,
+            ):
+                parts.append(delta)
+            summary = "".join(parts).strip() or None
+        except Exception:  # noqa: BLE001
+            logger.exception("Intake summary generation failed; storing raw only")
+        await intake_spool.append_intake(
+            spool_path=settings.intake_spool_path,
+            call_control_id=self._session.call_control_id,
+            from_number=self._session.from_number,
+            to_number=self._session.to_number,
+            language=self._language,
+            started_at=self._session.started_at,
+            transcript=self._call_log,
+            summary=summary,
+        )
+
     async def _run_assistant_turn_once(self) -> None:
         # Only one assistant turn at a time. If user speaks while we're
         # generating, we'll catch it on the next final.
         try:
+            # Never let the greeting's audio bleed into a real reply.
+            await self._cancel_greeting()
             self._prune_transcript()
             full_reply: list[str] = []
             pending = ""  # text buffered until a full sentence is ready
@@ -396,6 +637,9 @@ class ConversationOrchestrator:
             reply_text = "".join(full_reply).strip()
             if reply_text:
                 self._session.transcript.append(
+                    {"role": "assistant", "content": reply_text}
+                )
+                self._call_log.append(
                     {"role": "assistant", "content": reply_text}
                 )
                 logger.info("Agent: %s", reply_text)
