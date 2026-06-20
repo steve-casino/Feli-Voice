@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Intake Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:        #07080b;
+      --bg-soft:   #0d0f13;
+      --panel:    #11141a;
+      --panel-2:  #161a22;
+      --border:   rgba(255,255,255,0.06);
+      --border-2: rgba(255,255,255,0.10);
+      --text:     #f4f5f7;
+      --muted:    #8a8f99;
+      --dim:      #5b6068;
+      --accent:   #f5c478;
+      --good:     #54d6a3;
+      --warn:     #f59e6b;
+      --crit:     #ef6868;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    html { color-scheme: dark; -webkit-font-smoothing: antialiased; }
+    body {
+      background:
+        radial-gradient(60rem 60rem at 80% -10%, rgba(245,196,120,0.06), transparent 70%),
+        radial-gradient(40rem 40rem at -10% 100%, rgba(84,214,163,0.05), transparent 70%),
+        var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 28px; }
+
+    /* Top bar */
+    .top {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 22px 0;
+    }
+    .brand {
+      display: inline-flex; align-items: center; gap: 10px;
+      font-weight: 600; letter-spacing: -0.01em;
+    }
+    .brand-mark {
+      width: 24px; height: 24px; border-radius: 7px;
+      background: linear-gradient(135deg, var(--accent) 0%, #c08a3a 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.3);
+      display: inline-block;
+    }
+    .brand-name { font-size: 14px; color: var(--text); }
+    .brand-sep { color: var(--dim); margin: 0 4px; }
+    .brand-sub { font-size: 13px; color: var(--muted); font-weight: 500; }
+
+    .top-right { display: flex; align-items: center; gap: 18px; color: var(--muted); font-size: 13px; }
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--good); box-shadow: 0 0 0 4px rgba(84,214,163,0.18);
+      display: inline-block; margin-right: 8px;
+    }
+
+    /* Hero */
+    .hero { padding: 60px 0 36px; }
+    .eyebrow {
+      color: var(--muted); font-size: 12px; letter-spacing: 0.16em;
+      text-transform: uppercase; font-weight: 500;
+    }
+    .hero h1 {
+      font-size: clamp(36px, 5.2vw, 56px); line-height: 1.04; margin: 14px 0 0;
+      letter-spacing: -0.025em; font-weight: 600;
+    }
+    .hero h1 .accent { color: var(--accent); }
+    .hero p {
+      color: var(--muted); margin: 18px 0 0; max-width: 560px;
+      font-size: 15.5px; line-height: 1.6;
+    }
+
+    /* Metric tiles */
+    .metrics {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+      margin-top: 36px;
+    }
+    .metric {
+      background: linear-gradient(180deg, var(--panel) 0%, var(--bg-soft) 100%);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px 22px 20px;
+      position: relative; overflow: hidden;
+      transition: border-color .15s ease;
+    }
+    .metric:hover { border-color: var(--border-2); }
+    .metric-label {
+      display: flex; align-items: center; gap: 8px;
+      color: var(--muted); font-size: 12px; letter-spacing: 0.08em;
+      text-transform: uppercase; font-weight: 500;
+    }
+    .metric-value {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 44px; line-height: 1; letter-spacing: -0.02em;
+      margin-top: 14px; font-weight: 500;
+    }
+    .metric-delta { font-size: 12px; color: var(--dim); margin-top: 8px; }
+    .metric .pip {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--muted); display: inline-block;
+    }
+    .metric.urgent .pip   { background: var(--crit); box-shadow: 0 0 0 4px rgba(239,104,104,0.16); }
+    .metric.open .pip     { background: var(--warn); }
+    .metric.handled .pip  { background: var(--good); }
+
+    /* Primary action */
+    .cta-row {
+      margin-top: 28px;
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    }
+    .cta {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: var(--text); color: #0a0a0c;
+      padding: 12px 18px; border-radius: 11px;
+      font-weight: 600; font-size: 14.5px; text-decoration: none;
+      border: 1px solid var(--text);
+      transition: transform .12s ease, opacity .15s ease;
+    }
+    .cta:hover { opacity: 0.92; transform: translateY(-1px); }
+    .cta svg { width: 16px; height: 16px; }
+    .cta-secondary {
+      display: inline-flex; align-items: center; gap: 8px;
+      color: var(--muted); font-size: 13.5px; text-decoration: none;
+      padding: 12px 4px;
+    }
+    .cta-secondary:hover { color: var(--text); }
+
+    /* Sections */
+    .section { margin-top: 56px; }
+    .section-head {
+      display: flex; align-items: end; justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .section-head h2 {
+      margin: 0; font-size: 14px; font-weight: 600;
+      color: var(--text); letter-spacing: -0.005em;
+    }
+    .section-head a { color: var(--muted); font-size: 13px; text-decoration: none; }
+    .section-head a:hover { color: var(--text); }
+
+    /* Quick links */
+    .links {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+    }
+    .link {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      text-decoration: none; color: var(--text);
+      display: flex; flex-direction: column; gap: 6px;
+      transition: border-color .15s ease, transform .12s ease;
+    }
+    .link:hover { border-color: var(--border-2); transform: translateY(-1px); }
+    .link-title { font-size: 14.5px; font-weight: 600; letter-spacing: -0.005em; }
+    .link-desc  { font-size: 13px; color: var(--muted); line-height: 1.5; }
+    .link-meta  {
+      margin-top: 8px; font-size: 11.5px; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--dim); font-weight: 500;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .link-arrow {
+      align-self: flex-end; margin-top: -22px; opacity: 0.4;
+      transition: opacity .15s ease, transform .15s ease;
+    }
+    .link:hover .link-arrow { opacity: 1; transform: translate(2px, -2px); }
+
+    /* Footer */
+    footer {
+      margin-top: 80px; padding: 28px 0 36px;
+      border-top: 1px solid var(--border);
+      color: var(--dim); font-size: 12.5px;
+      display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;
+      gap: 12px;
+    }
+    footer .stack { display: inline-flex; align-items: center; gap: 16px; }
+    .kbd {
+      display: inline-block; padding: 2px 6px; border-radius: 5px;
+      background: var(--panel-2); border: 1px solid var(--border-2);
+      color: var(--muted); font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    }
+
+    @media (max-width: 760px) {
+      .metrics, .links { grid-template-columns: 1fr; }
+      .hero { padding-top: 36px; }
+      .top-right .clock { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <header class="top">
+      <a href="/" class="brand" style="text-decoration: none; color: inherit;">
+        <span class="brand-mark"></span>
+        <span class="brand-name">Intake Console</span>
+        <span class="brand-sep">·</span>
+        <span class="brand-sub">internal</span>
+      </a>
+      <div class="top-right">
+        <span><span class="status-dot"></span>operational</span>
+        <span class="clock" id="clock">—</span>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="eyebrow">Call operations</div>
+      <h1>Every call,<br><span class="accent">tracked.</span></h1>
+      <p>Live queue of inbound intakes and outbound callbacks. Sign in once; everything is one click away.</p>
+
+      <div class="cta-row">
+        <a class="cta" href="/intakes">
+          Open callback queue
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+        </a>
+        <a class="cta-secondary" href="#sections">Other tools
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+        </a>
+      </div>
+    </section>
+
+    <section class="metrics" aria-label="At a glance">
+      <div class="metric urgent">
+        <div class="metric-label"><span class="pip"></span>Urgent open</div>
+        <div class="metric-value" id="m-urgent">—</div>
+        <div class="metric-delta">flagged for early follow-up</div>
+      </div>
+      <div class="metric open">
+        <div class="metric-label"><span class="pip"></span>Open callbacks</div>
+        <div class="metric-value" id="m-open">—</div>
+        <div class="metric-delta">awaiting return call</div>
+      </div>
+      <div class="metric handled">
+        <div class="metric-label"><span class="pip"></span>Handled today</div>
+        <div class="metric-value" id="m-handled">—</div>
+        <div class="metric-delta">closed since midnight</div>
+      </div>
+    </section>
+
+    <section class="section" id="sections">
+      <div class="section-head">
+        <h2>Tools</h2>
+        <a href="/intakes">Go to queue →</a>
+      </div>
+      <div class="links">
+        <a class="link" href="/intakes">
+          <div class="link-meta">queue</div>
+          <div class="link-title">Callback queue</div>
+          <div class="link-desc">Tonight's intake calls with summary, transcript, and one-tap actions.</div>
+          <svg class="link-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M9 7h8v8"/></svg>
+        </a>
+        <a class="link" href="/health">
+          <div class="link-meta">system</div>
+          <div class="link-title">Health</div>
+          <div class="link-desc">Service status, connection state, last error.</div>
+          <svg class="link-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M9 7h8v8"/></svg>
+        </a>
+        <a class="link" href="#" aria-disabled="true" style="opacity:0.55; cursor: not-allowed;">
+          <div class="link-meta">outbound</div>
+          <div class="link-title">Dialer</div>
+          <div class="link-desc">Run an outbound callback batch (manual trigger).</div>
+          <svg class="link-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M9 7h8v8"/></svg>
+        </a>
+      </div>
+    </section>
+
+    <footer>
+      <span>Internal use only — not for distribution.</span>
+      <span class="stack">
+        <span class="kbd">⇧K</span> shortcuts
+        <span id="build">v0</span>
+      </span>
+    </footer>
+  </div>
+
+  <script>
+    // Light, no-dependency: a tiny clock and an optional live fetch.
+    (function () {
+      const fmt = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const clock = document.getElementById('clock');
+      function tick() { clock.textContent = fmt.format(new Date()); }
+      tick(); setInterval(tick, 30000);
+    })();
+
+    // Optional: if this page is served from the same origin as the API, try to
+    // pull live metric counts from /intakes?metrics=1. Silently falls back to
+    // dashes if the endpoint isn't authorized or doesn't exist yet.
+    (async function () {
+      try {
+        const r = await fetch('/intakes?metrics=1', { credentials: 'include', headers: { 'Accept': 'application/json' } });
+        if (!r.ok) return;
+        const data = await r.json();
+        if (typeof data.urgent  === 'number') document.getElementById('m-urgent').textContent  = data.urgent;
+        if (typeof data.open    === 'number') document.getElementById('m-open').textContent    = data.open;
+        if (typeof data.handled === 'number') document.getElementById('m-handled').textContent = data.handled;
+      } catch (_) {/* offline; leave dashes */}
+    })();
+  </script>
+</body>
+</html>
