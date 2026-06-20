@@ -100,6 +100,13 @@ class Settings:
     # covered by the same macOS TCC grant.
     intake_spool_path: str = "~/Library/Application Support/felicetti-voice/intakes.jsonl"
 
+    # Internal callback dashboard at /intakes — staff mark intakes as called
+    # back or skipped; the action log is append-only and joined with the
+    # intake spool at read time so intakes.jsonl stays the source of truth.
+    intake_actions_path: str = "~/Library/Application Support/felicetti-voice/intake_actions.jsonl"
+    dashboard_user: str = "feli"
+    dashboard_password: str | None = None  # None disables the dashboard
+
     # --- Derived ---
     # Filled in by __post_init__ via object.__setattr__ since the dataclass is frozen.
     media_ws_url: str | None = field(default=None, init=False)
@@ -145,6 +152,10 @@ class Settings:
             or "~/Library/Application Support/felicetti-voice/hangups.jsonl",
             intake_spool_path=_env("INTAKE_SPOOL_PATH")
             or "~/Library/Application Support/felicetti-voice/intakes.jsonl",
+            intake_actions_path=_env("INTAKE_ACTIONS_PATH")
+            or "~/Library/Application Support/felicetti-voice/intake_actions.jsonl",
+            dashboard_user=_env("DASHBOARD_USER") or "feli",
+            dashboard_password=_env("DASHBOARD_PASSWORD"),
         )
 
 

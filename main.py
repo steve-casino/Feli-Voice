@@ -7,6 +7,7 @@ import logging
 from fastapi import FastAPI
 
 from app.config import settings
+from app.handlers.dashboard import router as dashboard_router
 from app.handlers.outbound_call import router as outbound_call_router
 from app.handlers.telnyx_media import router as telnyx_media_router
 from app.handlers.telnyx_webhook import router as telnyx_webhook_router
@@ -29,6 +30,7 @@ app = FastAPI(
 app.include_router(telnyx_webhook_router)
 app.include_router(telnyx_media_router)
 app.include_router(outbound_call_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/health")
