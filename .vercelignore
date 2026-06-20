@@ -1,0 +1,27 @@
+# Vercel: ignore the Python voice-agent app entirely.
+# Only the static landing page in site/ should ship.
+
+app/
+tools/
+.venv/
+__pycache__/
+**/__pycache__/
+*.py
+*.pyc
+*.pyo
+
+# Env files — never ship these to Vercel
+.env
+.env.example
+
+# Python deps & db
+requirements.txt
+*.db
+*.sqlite
+*.sqlite3
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.vscode/
+.idea/
