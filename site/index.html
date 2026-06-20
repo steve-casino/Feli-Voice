@@ -221,7 +221,7 @@
       <p>Live queue of inbound intakes and outbound callbacks. Sign in once; everything is one click away.</p>
 
       <div class="cta-row">
-        <a class="cta" href="/intakes">
+        <a class="cta" href="https://api.felivoice.com/intakes">
           Open callback queue
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
         </a>
@@ -252,16 +252,16 @@
     <section class="section" id="sections">
       <div class="section-head">
         <h2>Tools</h2>
-        <a href="/intakes">Go to queue →</a>
+        <a href="https://api.felivoice.com/intakes">Go to queue →</a>
       </div>
       <div class="links">
-        <a class="link" href="/intakes">
+        <a class="link" href="https://api.felivoice.com/intakes">
           <div class="link-meta">queue</div>
           <div class="link-title">Callback queue</div>
           <div class="link-desc">Tonight's intake calls with summary, transcript, and one-tap actions.</div>
           <svg class="link-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M9 7h8v8"/></svg>
         </a>
-        <a class="link" href="/health">
+        <a class="link" href="https://api.felivoice.com/health">
           <div class="link-meta">system</div>
           <div class="link-title">Health</div>
           <div class="link-desc">Service status, connection state, last error.</div>
@@ -294,12 +294,13 @@
       tick(); setInterval(tick, 30000);
     })();
 
-    // Optional: if this page is served from the same origin as the API, try to
-    // pull live metric counts from /intakes?metrics=1. Silently falls back to
-    // dashes if the endpoint isn't authorized or doesn't exist yet.
+    // The metric tiles fetch live counts from the FastAPI app at
+    // api.felivoice.com. Cross-origin: requires the app to send CORS headers
+    // allowing this Vercel origin. Until then the request errors and tiles
+    // stay as dashes — that's intentional, not a UI bug.
     (async function () {
       try {
-        const r = await fetch('/intakes?metrics=1', { credentials: 'include', headers: { 'Accept': 'application/json' } });
+        const r = await fetch('https://api.felivoice.com/intakes?metrics=1', { credentials: 'include', headers: { 'Accept': 'application/json' } });
         if (!r.ok) return;
         const data = await r.json();
         if (typeof data.urgent  === 'number') document.getElementById('m-urgent').textContent  = data.urgent;
